@@ -1,10 +1,14 @@
 from typing import List
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import Column
+from marshmallow import ValidationError
+from sqlalchemy import Column, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 import os
 from datetime import date
+from flask_marshmallow import Marshmallow
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 
 app = Flask(__name__)
@@ -15,9 +19,13 @@ class Base(DeclarativeBase):
     pass
 
 db = SQLAlchemy(model_class = Base)
+ma = Marshmallow()
 
 db.init_app(app)
+ma.init_app(app)
 
+
+#========== Models ==========
 
 service_mechanics = db.Table(
     "service_mechanics",
@@ -60,6 +68,91 @@ class Mechanic (Base):
 
     service_tickets: Mapped[List['ServiceTicket']] = db.relationship(secondary = service_mechanics, back_populates = 'mechanics')
 
+#========== Schemas ==========
+
+class CustomerSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Customer
+
+class ServiceTicketSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = ServiceTicket
+
+class MechanicSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Mechanic
+
+customer_schema = CustomerSchema()
+customers_schema = CustomerSchema(many = True)
+
+service_ticket_schema = ServiceTicketSchema()
+service_tickets_schema = ServiceTicketSchema(many = True)
+
+mechanic_schema = MechanicSchema()
+mechanics_schema = MechanicSchema(many = True)
+
+#========= Routes ===========
+
+#Create Customer
+@app.route("/customers", methods = ['POST'])
+def create_customer():
+    try:
+        customer_data = customer_schema.load(request.json)
+    except ValidationError as e:
+        return jsonify(e.messages), 400
+    
+    new_customer = Customer(name=customer_data['name'], email=customer_data['email'], phone=customer_data['phone'])
+    db.session.add(new_customer)
+    db.session.commit()
+
+    return customer_schema.jsonify(new_customer), 201
+
+#Retrieve Customers
+@app.route("/customers", methods=["GET"])
+def get_customers():
+    query = select(Customer)
+    customers = db.session.execute(query).scalars().all()
+
+    return customers_schema.jsonify(customers), 200
+
+#Retrieve Customer
+@app.route("/customers/<int:customer_id>", methods=["GET"])
+def get_customer(customer_id):
+    customer = db.session.get(Customer, customer_id)
+
+    return customer_schema.jsonify(customer), 200
+
+#Update Customer
+@app.route("/customers/<int:customer_id>", methods=['PUT'])
+def update_customer(customer_id):
+    customer = db.session.get(Customer, customer_id)
+
+    if customer == None:
+        return jsonify({"Message": "Invalid id"}), 400
+    
+    try:
+        customer_data = customer_schema.load(request.json)
+    except ValidationError as e:
+        return jsonify(e.messages), 400
+    
+    for field, value in customer_data.items():
+        if value:
+            setattr(customer, field, value)
+    
+    db.session.commit()
+    return customer_schema.jsonify(customer), 200
+
+#Delete Customer
+@app.route("/customers/<int:customer_id>", methods=['DELETE'])
+def delete_customer(customer_id):
+    customer = db.session.get(Customer, customer_id)
+
+    if customer == None:
+        return jsonify({"Message": "Invalid id"}), 400
+    
+    db.session.delete(customer)
+    db.session.commit()
+    return jsonify({"Message": f"Successfully deleted customer {customer_id}!"})
 
 
 if __name__ == '__main__':
